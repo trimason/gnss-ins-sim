@@ -105,6 +105,10 @@ class InsDataMgr(object):
                                 legend=['ref_gps_lat', 'ref_gps_lon', 'ref_gps_alt',\
                                         'ref_gps_vN', 'ref_gps_vE', 'ref_gps_vD'])
                                 # downsampled true pos/vel
+        self.ref_odo = Sim_data(name='ref_odo',\
+                                description='true odometer velocity',\
+                                units=['m/s'],\
+                                legend=['ref_odo'])
         self.ref_mag = Sim_data(name='ref_mag',\
                                 description='true magnetic field in the body frame',\
                                 units=['uT', 'uT', 'uT'],\
@@ -125,6 +129,10 @@ class InsDataMgr(object):
                             output_units=['deg', 'deg', 'm', 'm/s', 'm/s', 'm/s'],\
                             legend=['gps_lat', 'gps_lon', 'gps_alt',\
                                     'gps_vN', 'gps_vE', 'gps_vD'])
+        self.odo = Sim_data(name='odo',\
+                                description='odometer velocity measurement',\
+                                units=['m/s'],\
+                                legend=['odo'])
         self.mag = Sim_data(name='mag',\
                             description='magnetometer measurements',\
                             units=['uT', 'uT', 'uT'],\
@@ -219,7 +227,7 @@ class InsDataMgr(object):
         ########## all data ##########
         # __all include all data that may occur in an INS solution.
         self.__all = {
-            # input data
+            # error-free data
             self.fs.name: self.fs,
             self.fs_gps.name: self.fs_gps,
             self.fs_mag.name: self.fs_mag,
@@ -234,11 +242,13 @@ class InsDataMgr(object):
             self.ref_gyro.name: self.ref_gyro,
             self.ref_accel.name: self.ref_accel,
             self.ref_gps.name: self.ref_gps,
+            self.ref_odo.name: self.ref_odo,
             self.ref_mag.name: self.ref_mag,
             # sensor data
             self.gyro.name: self.gyro,
             self.accel.name: self.accel,
             self.gps.name: self.gps,
+            self.odo.name: self.odo,
             self.mag.name: self.mag,
             # calibration algorithm output
             self.gyro_cal.name: self.gyro_cal,
@@ -627,7 +637,7 @@ class InsDataMgr(object):
         '''
         return data_name in self.__all.keys()
 
-    def __end_point_error_stat(self, data_name):
+    def __end_point_error_stat(self, data_name, group=True):
         '''
         end-point error statistics
         '''
@@ -635,14 +645,35 @@ class InsDataMgr(object):
         err_data_name = 'err_' + data_name
         if err_data_name not in self.__err:
             print('__end_point_error_stat: %s is not available.'% data_name)
+        # collect data according to keys
         if isinstance(self.__err[err_data_name].data, dict):
-            # a dict contains data of multiple runs
-            err = []
-            for i in self.__err[err_data_name].data:
-                err.append(self.__err[err_data_name].data[i][-1, :])
-            # convert list to np.array
-            err = np.array(err)
-            return self.__array_stat(err)
+            # collect groups
+            groups = None
+            if group:
+                keys = self.__err[err_data_name].data.keys()
+                groups = self.__get_data_groups(keys)
+            # only one group
+            if groups is None:
+                # a dict contains data of multiple runs
+                err = []
+                for i in self.__err[err_data_name].data:
+                    err.append(self.__err[err_data_name].data[i][-1, :])
+                # convert list to np.array
+                err = np.array(err)
+                return self.__array_stat(err)
+            # at least two groups
+            else:
+                stat = {'max': {}, 'avg': {}, 'std': {}}
+                for j in groups:
+                    err = []
+                    for i in self.__err[err_data_name].data:
+                        if j in i:
+                            err.append(self.__err[err_data_name].data[i][-1, :])
+                    tmp = self.__array_stat(err)
+                    stat['max'][j] = tmp['max']
+                    stat['avg'][j] = tmp['avg']
+                    stat['std'][j] = tmp['std']
+                return stat
         elif isinstance(self.__err[err_data_name].data, np.ndarray):
             err = self.__err[err_data_name].data[-1, :]
             return self.__array_stat(err)
@@ -689,6 +720,30 @@ class InsDataMgr(object):
         return {'max': np.max(np.abs(x), 0),\
                 'avg': np.average(x, 0),\
                 'std': np.std(x, 0)}
+
+    def __get_data_groups(self, keys):
+        '''
+        Check if the keys can be grouped. The key should be named as GROUP_idx.
+        For example list of keys [algo0_0, algo0_1 algo1_0, algo1_1] can be divided
+        into two groups: [algo0, algo1], and each group contains two elements. 
+        This is used to calculate statistics of error of results from multiple algorithms.
+        Args:
+            keys: dict keys
+        Return:
+            a list of groups if there is more than one group, and none if there is only one group
+        '''
+        groups = []
+        for i in keys:
+            idx = str(i).rfind('_')
+            if idx == -1:
+                groups = [] # one of the keys cannot be grouped, do not group
+                break
+            group_name = i[0:idx]
+            if group_name not in groups:
+                groups.append(group_name)
+        if len(groups) <= 1:
+            groups = None
+        return groups
 
     def __interp(self, x, xp, fp):
         '''
